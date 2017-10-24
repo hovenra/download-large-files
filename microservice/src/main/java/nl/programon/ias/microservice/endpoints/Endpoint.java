@@ -18,6 +18,10 @@ import javax.ws.rs.Produces;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.StreamingOutput;
+import java.io.IOException;
+import java.io.StreamCorruptedException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,33 +55,49 @@ public class Endpoint {
     //@ResponseStatus(value = HttpStatus.OK)
     public Response getCsvDownloadStatus(@Context HttpServletRequest request) {
         HttpSession session = request.getSession();
-        DownloadStatus error = (DownloadStatus) session.getAttribute("status");
-        return Response.ok(error).status(Response.Status.OK).build();
+        DownloadStatus error = new DownloadStatus((String) session.getAttribute("fileDownloadStatus"));
+        session.setAttribute("fileDownloadStatus", "unknown");
+        return Response.ok().entity(error).status(Response.Status.OK).build();
 
     }
 
     @Path("/csv")
     @GET
-    @Produces("text/csv")
+   // @Produces("text/csv")
     //@ResponseStatus(value = HttpStatus.OK)
     public Response getCsv(@Context HttpServletRequest request) {
         try {
 
-            Flowable<String> flowable = transactionService.getTransactions2();
+            HttpSession session = request.getSession();
+            session.setAttribute("fileDownloadStatus", "unknown");
+
+            Flowable<String> flowable = transactionService.getTransactions();
+            Response.ResponseBuilder responseBuilder = Response.noContent();
 
             final StreamingOutput output = output1 -> flowable
                     .subscribeOn(Schedulers.from(threadPoolExecutor))
                     .blockingSubscribe(
-                            transaction -> output1.write(transaction.getBytes()),
-                            e -> LOG.error("Something went wrong, disconnected client, please delete the file on the server now: {}", e.getMessage()),
-                            () -> LOG.debug("Transactions written to stream")
+                            transaction -> {
+                                output1.write(transaction.getBytes());
+                                //session.setAttribute("fileDownloadStatus", "succes");
+                            },
+                            e -> {
+
+                                session.setAttribute("fileDownloadStatus", "failed");
+                                LOG.error("Something went wrong, disconnected client, please delete the file on the server now: {}", e.getMessage());
+                            },
+                            () -> {
+                                session.setAttribute("fileDownloadStatus", "success");
+                                LOG.debug("Transactions written to stream");
+                            }
                     );
 
             return Response.status(Response.Status.OK).entity(output)
                     .header("Content-Disposition", "attachment; filename=transactions.csv")
                     .header("Content-Type", "text/csv").build();
         } catch (Throwable t) {
-            LOG.info(t.getMessage());
+
+            LOG.error(t.getMessage());
         }
         return Response.status(Response.Status.OK).build();
 
